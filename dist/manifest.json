@@ -1,0 +1,23 @@
+{
+        "manifest_version": 3,
+        "name": "LLM API Key Checker",
+        "version": "1.0.0",
+        "description": "Local API Key Checker extension.",
+        "permissions": [
+                "storage"
+        ],
+        "host_permissions": [
+                "<all_urls>"
+        ],
+        "action": {
+                "default_title": "Open Checker"
+        },
+        "background": {
+                "service_worker": "background.js"
+        },
+        "icons": {
+                "16": "icon.png",
+                "48": "icon.png",
+                "128": "icon.png"
+        }
+}
