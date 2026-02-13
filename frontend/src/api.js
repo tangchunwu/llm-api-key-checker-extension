@@ -1,5 +1,6 @@
 import regionsData from '../../config/regions.json';
 import providersData from '../../config/providers.json';
+import { normalizeBaseUrl } from '@/utils/url';
 
 /**
  * @description 区域数据，从配置文件加载。
@@ -9,6 +10,113 @@ export const REGIONS = regionsData;
  * @description 提供商数据，从配置文件加载。
  */
 export const PROVIDERS = providersData;
+const MODELS_RETRY_COUNT = 2;
+
+function extractModelIds(payload) {
+    if (!payload) return [];
+
+    const list = [];
+
+    if (Array.isArray(payload.data)) {
+        list.push(...payload.data);
+    }
+    if (Array.isArray(payload.models)) {
+        list.push(...payload.models);
+    }
+    if (Array.isArray(payload)) {
+        list.push(...payload);
+    }
+
+    const ids = list.map((item) => {
+        if (typeof item === 'string') return item;
+        if (!item || typeof item !== 'object') return '';
+        return item.id || item.name || item.model || '';
+    }).filter(Boolean).map(String);
+
+    return [...new Set(ids)];
+}
+
+function buildOpenAIModelUrls(baseUrl) {
+    const normalized = normalizeBaseUrl(baseUrl);
+    const urls = new Set();
+    urls.add(`${normalized}/models`);
+
+    if (normalized.endsWith('/v1')) {
+        const withoutV1 = normalized.slice(0, -3);
+        urls.add(`${withoutV1}/models`);
+    } else {
+        urls.add(`${normalized}/v1/models`);
+    }
+
+    return [...urls];
+}
+
+async function requestModelsWithFallback(urls, requestInit, transform = null) {
+    let lastError = null;
+
+    for (const url of urls) {
+        for (let attempt = 1; attempt <= MODELS_RETRY_COUNT; attempt++) {
+            try {
+                const response = await fetch(url, requestInit);
+                if (!response.ok) {
+                    const err = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+                    throw new Error(err.error || err.message || `HTTP error! status: ${response.status}`);
+                }
+
+                const payload = await response.json();
+                let models = extractModelIds(payload);
+                if (transform) {
+                    models = transform(models);
+                }
+
+                if (models.length > 0) {
+                    return models;
+                }
+
+                throw new Error('模型列表为空');
+            } catch (error) {
+                lastError = error;
+                if (attempt < MODELS_RETRY_COUNT) {
+                    await new Promise((resolve) => setTimeout(resolve, 300 * attempt));
+                }
+            }
+        }
+    }
+
+    throw lastError || new Error('未获取到模型列表');
+}
+
+async function fetchOpenAIModelsDirect(token, baseUrl) {
+    const urls = buildOpenAIModelUrls(baseUrl);
+    return requestModelsWithFallback(urls, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${token}` }
+    });
+}
+
+async function fetchAnthropicModelsDirect(token, baseUrl) {
+    const urls = buildOpenAIModelUrls(baseUrl);
+    return requestModelsWithFallback(urls, {
+        method: 'GET',
+        headers: {
+            'x-api-key': token,
+            'anthropic-version': '2023-06-01',
+            'anthropic-dangerous-direct-browser-access': 'true'
+        }
+    });
+}
+
+async function fetchGeminiModelsDirect(token, baseUrl) {
+    const normalizedBase = normalizeBaseUrl(baseUrl);
+    const urls = [
+        `${normalizedBase}/v1beta/models?key=${encodeURIComponent(token)}`,
+        `${normalizedBase}/v1/models?key=${encodeURIComponent(token)}`
+    ];
+    return requestModelsWithFallback(urls, { method: 'GET' }, (modelIds) => {
+        const normalized = modelIds.map((id) => id.startsWith('models/') ? id.slice(7) : id);
+        return [...new Set(normalized)];
+    });
+}
 
 /**
  * @description 调用后端 /models 接口，获取指定提供商的可用模型列表。
@@ -18,6 +126,34 @@ export const PROVIDERS = providersData;
  * @throws {Error} - 如果请求失败或返回无效数据。
  */
 export async function fetchModels(token, providerConfig) {
+    const providerKey = providerConfig.currentProvider;
+    const providerMeta = PROVIDERS[providerKey] || {};
+    const fetchMethod = providerMeta.fetchModels || '';
+
+    // 插件环境：直接请求厂商 API，避免访问 chrome-extension://.../models
+    const isExtensionRuntime = typeof location !== 'undefined' && (
+        location.protocol === 'chrome-extension:' || location.protocol === 'moz-extension:'
+    );
+
+    if (isExtensionRuntime) {
+        let models = [];
+        if (fetchMethod === 'fetchAnthropicModels') {
+            models = await fetchAnthropicModelsDirect(token, providerConfig.baseUrl);
+        } else if (fetchMethod === 'fetchGoogleModels') {
+            models = await fetchGeminiModelsDirect(token, providerConfig.baseUrl);
+        } else if (providerMeta.apiStyle === 'tavily') {
+            throw new Error('该提供商暂不支持自动获取模型列表');
+        } else {
+            models = await fetchOpenAIModelsDirect(token, providerConfig.baseUrl);
+        }
+
+        if (!models || models.length === 0) {
+            throw new Error('未获取到模型列表');
+        }
+        return models;
+    }
+
+    // 非插件环境：保持兼容旧后端路由
     const body = {
         token,
         providerConfig: {

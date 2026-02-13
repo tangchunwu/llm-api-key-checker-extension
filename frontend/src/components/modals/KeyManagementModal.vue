@@ -8,8 +8,18 @@ const uiStore = useUiStore();
 const configStore = useConfigStore();
 const historyStore = useHistoryStore();
 
+const activeSection = ref('keys');
 const selectedProvider = ref('all');
 const searchTerm = ref('');
+const importFileInput = ref(null);
+
+const sectionMeta = {
+    basic: { title: '基本设置', desc: '查看当前检测配置（只读）' },
+    models: { title: '模型列表', desc: '查看可用模型并一键复制' },
+    keys: { title: '密钥管理', desc: '管理可用记录中的模型、URL、Key' },
+    importExport: { title: '导入/导出', desc: '导出或导入识别记录' },
+    about: { title: '关于', desc: '页面使用说明' }
+};
 
 const providerOptions = computed(() => {
     const entries = Object.entries(configStore.providers || {}).map(([key, value]) => ({
@@ -18,6 +28,14 @@ const providerOptions = computed(() => {
     }));
     entries.sort((a, b) => a.name.localeCompare(b.name));
     return entries;
+});
+
+const currentProviderName = computed(() => {
+    return configStore.providers?.[configStore.currentProvider]?.name || configStore.currentProvider;
+});
+
+const currentProviderConfig = computed(() => {
+    return configStore.providerConfigs?.[configStore.currentProvider] || {};
 });
 
 const filteredRecords = computed(() => {
@@ -35,15 +53,13 @@ const filteredRecords = computed(() => {
     });
 });
 
-const rows = computed(() => {
+const keyRows = computed(() => {
     const list = [];
     for (const record of filteredRecords.value) {
-        const validKeys = (record.validKeys && record.validKeys.length > 0) ? record.validKeys : [];
-        const modelText = (record.availableModels && record.availableModels.length > 0)
-            ? record.availableModels.join(', ')
-            : '-';
+        const validKeys = Array.isArray(record.validKeys) ? record.validKeys.filter(Boolean) : [];
+        const models = Array.isArray(record.availableModels) ? record.availableModels.filter(Boolean) : [];
+        const modelText = models.length > 0 ? models.join(', ') : '-';
 
-        // 仅展示“可用状态”的记录（有有效 Key）
         if (validKeys.length === 0) continue;
 
         for (const key of validKeys) {
@@ -60,6 +76,39 @@ const rows = computed(() => {
     }
     return list;
 });
+
+const modelRows = computed(() => {
+    const map = new Map();
+
+    for (const record of filteredRecords.value) {
+        const validKeys = Array.isArray(record.validKeys) ? record.validKeys.filter(Boolean) : [];
+        if (validKeys.length === 0) continue;
+
+        const providerName = record.providerName || record.provider || '-';
+        const modelUrl = record.modelUrl || '-';
+        const models = Array.isArray(record.availableModels) ? record.availableModels.filter(Boolean) : [];
+
+        for (const model of models) {
+            const id = `${providerName}__${model}__${modelUrl}`;
+            const item = map.get(id) || {
+                id,
+                providerName,
+                model,
+                modelUrl,
+                latestTimestamp: 0,
+                count: 0
+            };
+            item.count += 1;
+            item.latestTimestamp = Math.max(item.latestTimestamp, record.timestamp || 0);
+            map.set(id, item);
+        }
+    }
+
+    return Array.from(map.values()).sort((a, b) => b.latestTimestamp - a.latestTimestamp);
+});
+
+const pageTitle = computed(() => sectionMeta[activeSection.value]?.title || '密钥管理');
+const pageDesc = computed(() => sectionMeta[activeSection.value]?.desc || '');
 
 const formatTime = (timestamp) => {
     if (!timestamp) return '-';
@@ -102,7 +151,7 @@ const deleteRecord = (recordId) => {
 };
 
 const refreshList = () => {
-    uiStore.showToast('列表已刷新', 'success', 1500);
+    uiStore.showToast('列表已刷新', 'success', 1200);
 };
 
 const close = () => {
@@ -115,32 +164,112 @@ const clearAll = async () => {
     historyStore.clearHistory();
     uiStore.showToast('记录已清空', 'success');
 };
+
+const setSection = (section) => {
+    activeSection.value = section;
+};
+
+const exportHistory = () => {
+    if (!historyStore.history || historyStore.history.length === 0) {
+        uiStore.showToast('没有记录可导出', 'warning');
+        return;
+    }
+
+    const content = JSON.stringify(historyStore.history, null, 2);
+    const blob = new Blob([content], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+
+    link.href = url;
+    link.download = `llm-checker-history-${timestamp}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    uiStore.showToast('记录已导出', 'success');
+};
+
+const openImportDialog = () => {
+    if (importFileInput.value) {
+        importFileInput.value.value = '';
+        importFileInput.value.click();
+    }
+};
+
+const normalizeImportedRecord = (item, index) => {
+    const timestamp = Number(item?.timestamp) || Date.now();
+    const validKeys = Array.isArray(item?.validKeys) ? item.validKeys.filter(Boolean) : [];
+    const availableModels = Array.isArray(item?.availableModels) ? item.availableModels.filter(Boolean) : [];
+
+    return {
+        id: Number(item?.id) || (Date.now() + index),
+        timestamp,
+        provider: item?.provider || 'unknown',
+        providerName: item?.providerName || item?.provider || '未知提供商',
+        tokensInput: item?.tokensInput || '',
+        stats: item?.stats || {
+            valid: validKeys.length,
+            lowBalance: 0,
+            zeroBalance: 0,
+            noQuota: 0,
+            rateLimit: 0,
+            invalid: 0,
+            duplicate: 0
+        },
+        validKeys,
+        availableModels,
+        modelUrl: item?.modelUrl || ''
+    };
+};
+
+const importHistory = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+        const raw = await file.text();
+        const parsed = JSON.parse(raw);
+
+        if (!Array.isArray(parsed)) {
+            uiStore.showToast('导入失败：JSON 必须是数组', 'error');
+            return;
+        }
+
+        const normalized = parsed.map((item, idx) => normalizeImportedRecord(item, idx));
+        historyStore.history = normalized;
+        uiStore.showToast(`导入成功，共 ${normalized.length} 条`, 'success');
+    } catch {
+        uiStore.showToast('导入失败：文件格式不正确', 'error');
+    }
+};
 </script>
 
 <template>
     <div class="modal-content key-management-modal">
         <div class="km-sidebar">
             <h3>设置选项</h3>
-            <button class="menu-item">基本设置</button>
-            <button class="menu-item">模型列表</button>
-            <button class="menu-item active">密钥管理</button>
-            <button class="menu-item">导入/导出</button>
-            <button class="menu-item">关于</button>
+            <button class="menu-item" :class="{ active: activeSection === 'basic' }" @click="setSection('basic')">基本设置</button>
+            <button class="menu-item" :class="{ active: activeSection === 'models' }" @click="setSection('models')">模型列表</button>
+            <button class="menu-item" :class="{ active: activeSection === 'keys' }" @click="setSection('keys')">密钥管理</button>
+            <button class="menu-item" :class="{ active: activeSection === 'importExport' }" @click="setSection('importExport')">导入/导出</button>
+            <button class="menu-item" :class="{ active: activeSection === 'about' }" @click="setSection('about')">关于</button>
         </div>
 
         <div class="km-main">
             <div class="km-header">
                 <div>
-                    <h2>密钥管理</h2>
-                    <p>管理识别记录中的可用模型、模型 URL 和有效 Key</p>
+                    <h2>{{ pageTitle }}</h2>
+                    <p>{{ pageDesc }}</p>
                 </div>
                 <div class="header-actions">
-                    <button class="btn secondary" @click="refreshList">刷新列表</button>
-                    <button class="btn secondary" @click="close">关闭</button>
+                    <button class="btn" @click="refreshList">刷新列表</button>
+                    <button class="btn" @click="close">关闭</button>
                 </div>
             </div>
 
-            <div class="filters">
+            <div class="filters" v-if="activeSection === 'keys' || activeSection === 'models'">
                 <div class="filter-item">
                     <label for="providerFilter">选择账号</label>
                     <select id="providerFilter" v-model="selectedProvider">
@@ -156,47 +285,131 @@ const clearAll = async () => {
                 </div>
             </div>
 
-            <div class="table-wrap">
-                <table v-if="rows.length > 0" class="km-table">
-                    <thead>
-                        <tr>
-                            <th>账号</th>
-                            <th>可用模型</th>
-                            <th>模型 URL</th>
-                            <th>Key</th>
-                            <th>时间</th>
-                            <th>操作</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <tr v-for="row in rows" :key="row.id">
-                            <td>{{ row.providerName }}</td>
-                            <td :title="row.modelText">{{ row.modelText }}</td>
-                            <td :title="row.modelUrl">{{ row.modelUrl }}</td>
-                            <td :title="row.key">{{ row.key }}</td>
-                            <td>{{ formatTime(row.timestamp) }}</td>
-                            <td>
-                                <div class="row-actions">
-                                    <button class="btn-text" @click="copyModelUrl(row.modelUrl)">复制 URL</button>
-                                    <button class="btn-text" @click="copyKey(row.key)">复制 Key</button>
-                                    <button class="btn-text" @click="copyModel(row.modelText)">复制模型</button>
-                                    <button class="btn-text danger" @click="deleteRecord(row.recordId)">删除记录</button>
-                                </div>
-                            </td>
-                        </tr>
-                    </tbody>
-                </table>
+            <div class="content-wrap" v-if="activeSection === 'basic'">
+                <div class="card-grid">
+                    <div class="card">
+                        <h4>当前提供商</h4>
+                        <p>{{ currentProviderName }}</p>
+                    </div>
+                    <div class="card">
+                        <h4>模型 URL</h4>
+                        <p>{{ currentProviderConfig.baseUrl || '-' }}</p>
+                        <button class="btn-text" @click="copyModelUrl(currentProviderConfig.baseUrl || '-')">复制 URL</button>
+                    </div>
+                    <div class="card">
+                        <h4>测试模型</h4>
+                        <p>{{ currentProviderConfig.model || '-' }}</p>
+                        <button class="btn-text" @click="copyModel(currentProviderConfig.model || '-')">复制模型</button>
+                    </div>
+                    <div class="card">
+                        <h4>并发 / 阈值</h4>
+                        <p>{{ configStore.concurrency }} / {{ configStore.threshold }}</p>
+                    </div>
+                </div>
+            </div>
 
-                <div v-else class="empty-state">
-                    <p>暂无可用记录</p>
-                    <span>请先检测出可用 Key 后再管理。</span>
+            <div class="content-wrap" v-else-if="activeSection === 'models'">
+                <div class="table-wrap">
+                    <table v-if="modelRows.length > 0" class="km-table">
+                        <thead>
+                            <tr>
+                                <th>账号</th>
+                                <th>模型</th>
+                                <th>模型 URL</th>
+                                <th>出现次数</th>
+                                <th>最近时间</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="row in modelRows" :key="row.id">
+                                <td>{{ row.providerName }}</td>
+                                <td :title="row.model">{{ row.model }}</td>
+                                <td :title="row.modelUrl">{{ row.modelUrl }}</td>
+                                <td>{{ row.count }}</td>
+                                <td>{{ formatTime(row.latestTimestamp) }}</td>
+                                <td>
+                                    <div class="row-actions">
+                                        <button class="btn-text" @click="copyModel(row.model)">复制模型</button>
+                                        <button class="btn-text" @click="copyModelUrl(row.modelUrl)">复制 URL</button>
+                                    </div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <div v-else class="empty-state">
+                        <p>暂无可用模型记录</p>
+                        <span>请先检测出可用 Key 后再查看。</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="content-wrap" v-else-if="activeSection === 'keys'">
+                <div class="table-wrap">
+                    <table v-if="keyRows.length > 0" class="km-table">
+                        <thead>
+                            <tr>
+                                <th>账号</th>
+                                <th>可用模型</th>
+                                <th>模型 URL</th>
+                                <th>Key</th>
+                                <th>时间</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="row in keyRows" :key="row.id">
+                                <td>{{ row.providerName }}</td>
+                                <td :title="row.modelText">{{ row.modelText }}</td>
+                                <td :title="row.modelUrl">{{ row.modelUrl }}</td>
+                                <td :title="row.key">{{ row.key }}</td>
+                                <td>{{ formatTime(row.timestamp) }}</td>
+                                <td>
+                                    <div class="row-actions">
+                                        <button class="btn-text" @click="copyModelUrl(row.modelUrl)">复制 URL</button>
+                                        <button class="btn-text" @click="copyKey(row.key)">复制 Key</button>
+                                        <button class="btn-text" @click="copyModel(row.modelText)">复制模型</button>
+                                        <button class="btn-text danger" @click="deleteRecord(row.recordId)">删除记录</button>
+                                    </div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <div v-else class="empty-state">
+                        <p>暂无可用记录</p>
+                        <span>请先检测出可用 Key 后再管理。</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="content-wrap" v-else-if="activeSection === 'importExport'">
+                <div class="ie-panel">
+                    <div class="ie-card">
+                        <h4>导出记录</h4>
+                        <p>将当前识别历史导出为 JSON 文件。</p>
+                        <button class="btn" @click="exportHistory">导出 JSON</button>
+                    </div>
+                    <div class="ie-card">
+                        <h4>导入记录</h4>
+                        <p>从 JSON 文件导入识别历史（会覆盖当前记录）。</p>
+                        <button class="btn" @click="openImportDialog">导入 JSON</button>
+                        <input ref="importFileInput" type="file" accept="application/json" class="hidden-input" @change="importHistory" />
+                    </div>
+                </div>
+            </div>
+
+            <div class="content-wrap" v-else>
+                <div class="about-panel">
+                    <h4>功能说明</h4>
+                    <p>1. 只有检测结果中的可用 Key 会进入“密钥管理”。</p>
+                    <p>2. 你可以在“密钥管理”里直接复制 URL、Key、可用模型。</p>
+                    <p>3. “模型列表”展示历史中出现过的可用模型并支持复制。</p>
+                    <p>4. “导入/导出”用于迁移历史记录数据。</p>
                 </div>
             </div>
 
             <div class="km-footer">
-                <button class="btn danger-outline" :disabled="historyStore.history.length === 0" @click="clearAll">
-                    清空全部记录
-                </button>
+                <button class="btn danger" :disabled="historyStore.history.length === 0" @click="clearAll">清空全部记录</button>
                 <span>总记录: {{ historyStore.history.length }}</span>
             </div>
         </div>
@@ -225,7 +438,7 @@ const clearAll = async () => {
 
 .km-sidebar h3 {
     margin: 0 0 10px;
-    font-size: 28px;
+    font-size: 40px;
     color: var(--text-primary);
     font-family: var(--font-serif);
 }
@@ -238,7 +451,12 @@ const clearAll = async () => {
     border-radius: var(--radius-md);
     color: var(--text-secondary);
     font-weight: 600;
-    cursor: default;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+
+.menu-item:hover {
+    background: var(--bg-tertiary);
 }
 
 .menu-item.active {
@@ -263,7 +481,7 @@ const clearAll = async () => {
 
 .km-header h2 {
     margin: 0 0 6px;
-    font-size: 36px;
+    font-size: 52px;
     font-family: var(--font-serif);
 }
 
@@ -275,6 +493,29 @@ const clearAll = async () => {
 .header-actions {
     display: flex;
     gap: 10px;
+}
+
+.btn {
+    border: 1px solid var(--border-color);
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    border-radius: var(--radius-sm);
+    padding: 8px 12px;
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.btn:hover {
+    background: var(--bg-tertiary);
+}
+
+.btn.danger {
+    color: var(--accent-error);
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
 }
 
 .filters {
@@ -298,11 +539,16 @@ select {
     padding: 0 12px;
 }
 
-.table-wrap {
+.content-wrap {
     flex: 1;
     min-height: 0;
     overflow: auto;
     padding: 0 24px 16px;
+}
+
+.table-wrap {
+    height: 100%;
+    overflow: auto;
 }
 
 .km-table {
@@ -370,6 +616,66 @@ select {
     color: var(--text-secondary);
 }
 
+.card-grid {
+    padding-top: 16px;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.card {
+    border: 1px solid var(--border-color-light);
+    border-radius: var(--radius-md);
+    padding: 14px;
+    background: var(--bg-surface);
+}
+
+.card h4 {
+    margin: 0 0 8px;
+}
+
+.card p {
+    margin: 0 0 12px;
+    color: var(--text-secondary);
+    word-break: break-all;
+}
+
+.ie-panel {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    padding-top: 16px;
+}
+
+.ie-card {
+    border: 1px solid var(--border-color-light);
+    border-radius: var(--radius-md);
+    padding: 14px;
+}
+
+.ie-card h4 {
+    margin: 0 0 8px;
+}
+
+.ie-card p {
+    margin: 0 0 12px;
+    color: var(--text-secondary);
+}
+
+.hidden-input {
+    display: none;
+}
+
+.about-panel {
+    padding-top: 16px;
+    color: var(--text-secondary);
+}
+
+.about-panel h4 {
+    color: var(--text-primary);
+    margin-bottom: 10px;
+}
+
 .km-footer {
     border-top: 1px solid var(--border-color-light);
     padding: 12px 24px;
@@ -389,8 +695,18 @@ select {
         display: none;
     }
 
-    .filters {
+    .filters,
+    .ie-panel,
+    .card-grid {
         grid-template-columns: 1fr;
+    }
+
+    .km-header h2 {
+        font-size: 32px;
+    }
+
+    .km-sidebar h3 {
+        font-size: 28px;
     }
 }
 </style>
