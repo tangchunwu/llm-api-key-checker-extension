@@ -20,6 +20,7 @@ const sectionMeta = {
     importExport: { title: '导入/导出', desc: '导出或导入识别记录' },
     about: { title: '关于', desc: '页面使用说明' }
 };
+const safeHistory = computed(() => Array.isArray(historyStore.history) ? historyStore.history : []);
 
 const providerOptions = computed(() => {
     const entries = Object.entries(configStore.providers || {}).map(([key, value]) => ({
@@ -40,7 +41,7 @@ const currentProviderConfig = computed(() => {
 
 const filteredRecords = computed(() => {
     const keyword = searchTerm.value.trim().toLowerCase();
-    return (historyStore.history || []).filter((record) => {
+    return safeHistory.value.filter((record) => {
         const providerMatched = selectedProvider.value === 'all' || record.provider === selectedProvider.value;
         if (!providerMatched) return false;
 
@@ -170,12 +171,12 @@ const setSection = (section) => {
 };
 
 const exportHistory = () => {
-    if (!historyStore.history || historyStore.history.length === 0) {
+    if (safeHistory.value.length === 0) {
         uiStore.showToast('没有记录可导出', 'warning');
         return;
     }
 
-    const content = JSON.stringify(historyStore.history, null, 2);
+    const content = JSON.stringify(safeHistory.value, null, 2);
     const blob = new Blob([content], { type: 'application/json;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -238,7 +239,11 @@ const importHistory = async (event) => {
         }
 
         const normalized = parsed.map((item, idx) => normalizeImportedRecord(item, idx));
-        historyStore.history = normalized;
+        if (typeof historyStore.replaceHistory === 'function') {
+            historyStore.replaceHistory(normalized);
+        } else {
+            historyStore.history = normalized;
+        }
         uiStore.showToast(`导入成功，共 ${normalized.length} 条`, 'success');
     } catch {
         uiStore.showToast('导入失败：文件格式不正确', 'error');
@@ -409,8 +414,8 @@ const importHistory = async (event) => {
             </div>
 
             <div class="km-footer">
-                <button class="btn danger" :disabled="historyStore.history.length === 0" @click="clearAll">清空全部记录</button>
-                <span>总记录: {{ historyStore.history.length }}</span>
+                <button class="btn danger" :disabled="safeHistory.length === 0" @click="clearAll">清空全部记录</button>
+                <span>总记录: {{ safeHistory.length }}</span>
             </div>
         </div>
     </div>
