@@ -110,8 +110,8 @@ onBeforeUnmount(() => {
         <div class="header">
             <h1>API KEY 检测工具</h1>
             <div class="header-controls">
-                <button class="theme-toggle" @click="uiStore.openModal('history')" title="历史记录">
-                    🕒
+                <button class="theme-toggle" @click="uiStore.openModal('keyManagement')" title="密钥管理">
+                    🔑
                 </button>
                 <button class="theme-toggle" @click="uiStore.toggleTheme"
                     :title="uiStore.isDark ? '切换到亮色模式' : '切换到暗色模式'">

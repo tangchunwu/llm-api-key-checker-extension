@@ -26,8 +26,33 @@ const loadConfig = (record) => {
     if (record.provider) {
         configStore.currentProvider = record.provider;
     }
+    if (record.provider && configStore.providerConfigs[record.provider]) {
+        if (record.modelUrl) {
+            configStore.providerConfigs[record.provider].baseUrl = record.modelUrl;
+        }
+        if (record.availableModels && record.availableModels.length > 0) {
+            configStore.providerConfigs[record.provider].model = record.availableModels[0];
+        }
+    }
     uiStore.closeModal();
     uiStore.showToast(`已加载 ${record.providerName} 的历史配置`, 'success');
+};
+
+const copyText = async (text, successMessage) => {
+    if (!text) {
+        uiStore.showToast('没有可复制的内容', 'warning');
+        return;
+    }
+    try {
+        await navigator.clipboard.writeText(text);
+        uiStore.showToast(successMessage, 'success');
+    } catch (err) {
+        uiStore.showToast('复制失败', 'error');
+    }
+};
+
+const copyModelUrl = async (modelUrl) => {
+    await copyText(modelUrl, '模型 URL 已复制');
 };
 
 // 复制有效 Key
@@ -36,12 +61,7 @@ const copyValidKeys = async (validKeys) => {
         uiStore.showToast('没有有效的 Key 可复制', 'warning');
         return;
     }
-    try {
-        await navigator.clipboard.writeText(validKeys.join('\n'));
-        uiStore.showToast(`已复制 ${validKeys.length} 个有效 Key`, 'success');
-    } catch (err) {
-        uiStore.showToast('复制失败', 'error');
-    }
+    await copyText(validKeys.join('\n'), `已复制 ${validKeys.length} 个有效 Key`);
 };
 
 const deleteRecord = (id) => {
@@ -89,6 +109,23 @@ const close = () => {
                             <span class="stat invalid" title="无效/其他">
                                 <span class="dot red"></span> 无效: {{ item.stats.invalid + item.stats.noQuota + item.stats.zeroBalance + item.stats.rateLimit + item.stats.duplicate }}
                             </span>
+                        </div>
+
+                        <div class="meta-row">
+                            <span class="meta-label">可用模型:</span>
+                            <span class="meta-value">{{ (item.availableModels && item.availableModels.length > 0) ? item.availableModels.join(', ') : '-' }}</span>
+                        </div>
+
+                        <div class="meta-row">
+                            <span class="meta-label">模型 URL:</span>
+                            <span class="meta-value">{{ item.modelUrl || '-' }}</span>
+                            <button
+                                class="btn-text"
+                                :disabled="!item.modelUrl"
+                                @click="copyModelUrl(item.modelUrl)"
+                            >
+                                <span class="icon">📋</span> 复制 URL
+                            </button>
                         </div>
                         
                         <div class="actions">
@@ -196,6 +233,26 @@ const close = () => {
     padding: 8px 12px;
     background: var(--bg-input);
     border-radius: var(--radius-sm);
+}
+
+.meta-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+    font-size: 13px;
+}
+
+.meta-label {
+    color: var(--text-tertiary);
+    min-width: 64px;
+}
+
+.meta-value {
+    color: var(--text-primary);
+    flex: 1;
+    word-break: break-all;
+    font-family: var(--font-mono);
 }
 
 .divider {

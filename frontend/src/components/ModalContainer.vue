@@ -19,6 +19,7 @@ const SettingsModal = defineAsyncComponent(() => import('./modals/SettingsModal.
 const ConfirmationModal = defineAsyncComponent(() => import('./modals/ConfirmationModal.vue'));
 
 const HistoryModal = defineAsyncComponent(() => import('./modals/HistoryModal.vue'));
+const KeyManagementModal = defineAsyncComponent(() => import('./modals/KeyManagementModal.vue'));
 
 /**
  * @description 计算属性，根据 uiStore.activeModal 的值动态选择要渲染的模态框组件。
@@ -35,6 +36,8 @@ const activeModalComponent = computed(() => {
             return ConfirmationModal;
         case 'history':
             return HistoryModal;
+        case 'keyManagement':
+            return KeyManagementModal;
         default:
             return null;
     }

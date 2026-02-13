@@ -5,6 +5,7 @@ import { useResultsStore } from './results';
 import { useHistoryStore } from './history';
 import { checkToken, categorizeTokenError } from '../utils/local_checkers';
 import { MAX_KEYS_LIMIT } from '@/constants';
+import { normalizeBaseUrl } from '@/utils/url';
 import pLimit from 'p-limit'; // 需要 npm install p-limit
 
 export const useCheckerStore = defineStore('checker', () => {
@@ -157,6 +158,11 @@ export const useCheckerStore = defineStore('checker', () => {
             const historyStore = useHistoryStore();
             const validResults = resultsStore.results.valid || [];
             const validKeys = validResults.map(item => item.token);
+            const currentProvider = configStore.currentProvider;
+            const providerName = configStore.providers[currentProvider]?.name || currentProvider;
+            const providerConfig = configStore.providerConfigs[currentProvider] || {};
+            const currentModel = providerConfig.model || '';
+            const modelUrl = normalizeBaseUrl(providerConfig.baseUrl || '');
 
             // 统计各状态数量
             const stats = {};
@@ -168,11 +174,13 @@ export const useCheckerStore = defineStore('checker', () => {
             historyStore.addRecord({
                 id: Date.now(),
                 timestamp: Date.now(),
-                provider: configStore.currentProvider,
-                providerName: configStore.providers[configStore.currentProvider]?.name || configStore.currentProvider,
+                provider: currentProvider,
+                providerName,
                 tokensInput: configStore.tokensInput,
                 stats,
-                validKeys
+                validKeys,
+                availableModels: currentModel ? [currentModel] : [],
+                modelUrl
             });
         } catch (e) {
             console.error("Failed to save history record:", e);
