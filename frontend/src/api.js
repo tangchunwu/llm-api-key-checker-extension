@@ -53,10 +53,12 @@ function buildOpenAIModelUrls(baseUrl) {
 
 async function requestModelsWithFallback(urls, requestInit, transform = null) {
     let lastError = null;
+    const triedUrls = new Set();
 
     for (const url of urls) {
         for (let attempt = 1; attempt <= MODELS_RETRY_COUNT; attempt++) {
             try {
+                triedUrls.add(url);
                 const response = await fetch(url, requestInit);
                 if (!response.ok) {
                     const err = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
@@ -83,7 +85,9 @@ async function requestModelsWithFallback(urls, requestInit, transform = null) {
         }
     }
 
-    throw lastError || new Error('未获取到模型列表');
+    const triedText = [...triedUrls].join(' | ');
+    const baseMessage = lastError?.message || '未获取到模型列表';
+    throw new Error(`${baseMessage}；已尝试端点: ${triedText}`);
 }
 
 async function fetchOpenAIModelsDirect(token, baseUrl) {

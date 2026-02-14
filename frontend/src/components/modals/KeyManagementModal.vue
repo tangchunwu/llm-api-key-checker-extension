@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useUiStore } from '@/stores/ui';
 import { useConfigStore } from '@/stores/config';
 import { useHistoryStore } from '@/stores/history';
@@ -11,6 +11,15 @@ const historyStore = useHistoryStore();
 const activeSection = ref('keys');
 const selectedProvider = ref('all');
 const searchTerm = ref('');
+const keySortOrder = ref('desc');
+const selectedKeyRowIds = ref(new Set());
+const importMode = ref('overwrite');
+const importPreview = ref({
+    fileName: '',
+    records: [],
+    validRows: 0,
+    error: ''
+});
 const importFileInput = ref(null);
 
 const sectionMeta = {
@@ -75,8 +84,16 @@ const keyRows = computed(() => {
             });
         }
     }
+    list.sort((a, b) => keySortOrder.value === 'desc'
+        ? (b.timestamp || 0) - (a.timestamp || 0)
+        : (a.timestamp || 0) - (b.timestamp || 0)
+    );
     return list;
 });
+
+const selectedKeyRows = computed(() => keyRows.value.filter((row) => selectedKeyRowIds.value.has(row.id)));
+const allVisibleRowsSelected = computed(() => keyRows.value.length > 0 && selectedKeyRows.value.length === keyRows.value.length);
+const hasSelectedRows = computed(() => selectedKeyRows.value.length > 0);
 
 const modelRows = computed(() => {
     const map = new Map();
@@ -147,8 +164,47 @@ const copyModel = async (modelText) => {
     await copyText(modelText, '可用模型已复制');
 };
 
+const copyBatchField = async (field, successPrefix) => {
+    if (!hasSelectedRows.value) {
+        uiStore.showToast('请先勾选记录', 'warning');
+        return;
+    }
+    const values = [...new Set(selectedKeyRows.value.map((row) => row[field]).filter((v) => v && v !== '-'))];
+    if (values.length === 0) {
+        uiStore.showToast('选中项没有可复制内容', 'warning');
+        return;
+    }
+    await copyText(values.join('\n'), `${successPrefix}已复制 (${values.length} 条)`);
+};
+
+const copySelectedKeys = async () => {
+    await copyBatchField('key', 'Key ');
+};
+
+const copySelectedUrls = async () => {
+    await copyBatchField('modelUrl', 'URL ');
+};
+
+const copySelectedModels = async () => {
+    await copyBatchField('modelText', '模型 ');
+};
+
 const deleteRecord = (recordId) => {
     historyStore.deleteRecord(recordId);
+};
+
+const deleteSelectedRows = async () => {
+    if (!hasSelectedRows.value) {
+        uiStore.showToast('请先勾选记录', 'warning');
+        return;
+    }
+    const confirmed = await uiStore.showConfirmation(`确定删除已选记录吗？共 ${selectedKeyRows.value.length} 行。`);
+    if (!confirmed) return;
+
+    const recordIds = [...new Set(selectedKeyRows.value.map((row) => row.recordId))];
+    recordIds.forEach((id) => historyStore.deleteRecord(id));
+    clearSelection();
+    uiStore.showToast(`已删除 ${recordIds.length} 条记录`, 'success');
 };
 
 const refreshList = () => {
@@ -160,14 +216,39 @@ const close = () => {
 };
 
 const clearAll = async () => {
-    const confirmed = await uiStore.showConfirmation('确定要清空全部识别记录吗？');
+    const confirmed = await uiStore.showConfirmation('确定要清空全部识别记录吗？此操作不可恢复。');
     if (!confirmed) return;
+    const text = window.prompt('请输入 CLEAR 以确认清空全部记录');
+    if (text !== 'CLEAR') {
+        uiStore.showToast('已取消清空（输入不匹配）', 'info');
+        return;
+    }
     historyStore.clearHistory();
     uiStore.showToast('记录已清空', 'success');
 };
 
 const setSection = (section) => {
     activeSection.value = section;
+    selectedKeyRowIds.value = new Set();
+};
+
+const toggleSelectRow = (rowId, checked) => {
+    const next = new Set(selectedKeyRowIds.value);
+    if (checked) next.add(rowId);
+    else next.delete(rowId);
+    selectedKeyRowIds.value = next;
+};
+
+const toggleSelectAllVisible = (checked) => {
+    if (!checked) {
+        selectedKeyRowIds.value = new Set();
+        return;
+    }
+    selectedKeyRowIds.value = new Set(keyRows.value.map((row) => row.id));
+};
+
+const clearSelection = () => {
+    selectedKeyRowIds.value = new Set();
 };
 
 const exportHistory = () => {
@@ -234,21 +315,81 @@ const importHistory = async (event) => {
         const parsed = JSON.parse(raw);
 
         if (!Array.isArray(parsed)) {
-            uiStore.showToast('导入失败：JSON 必须是数组', 'error');
+            importPreview.value = {
+                fileName: file.name,
+                records: [],
+                validRows: 0,
+                error: '导入失败：JSON 必须是数组'
+            };
             return;
         }
 
         const normalized = parsed.map((item, idx) => normalizeImportedRecord(item, idx));
-        if (typeof historyStore.replaceHistory === 'function') {
-            historyStore.replaceHistory(normalized);
-        } else {
-            historyStore.history = normalized;
-        }
-        uiStore.showToast(`导入成功，共 ${normalized.length} 条`, 'success');
+        const validRows = normalized.reduce((acc, item) => acc + (item.validKeys?.length || 0), 0);
+        importPreview.value = {
+            fileName: file.name,
+            records: normalized,
+            validRows,
+            error: ''
+        };
     } catch {
-        uiStore.showToast('导入失败：文件格式不正确', 'error');
+        importPreview.value = {
+            fileName: file?.name || '',
+            records: [],
+            validRows: 0,
+            error: '导入失败：文件格式不正确'
+        };
     }
 };
+
+const ensureUniqueIds = (existing, incoming) => {
+    const used = new Set(existing.map((item) => item.id));
+    return incoming.map((item, idx) => {
+        let nextId = item.id;
+        if (used.has(nextId)) {
+            nextId = Date.now() + idx;
+        }
+        used.add(nextId);
+        return { ...item, id: nextId };
+    });
+};
+
+const applyImport = () => {
+    if (!importPreview.value.records.length) {
+        uiStore.showToast('没有可导入的数据', 'warning');
+        return;
+    }
+
+    const mode = importMode.value;
+    const current = safeHistory.value;
+    let target = importPreview.value.records;
+
+    if (mode === 'merge') {
+        const mergedIncoming = ensureUniqueIds(current, importPreview.value.records);
+        target = [...mergedIncoming, ...current];
+    }
+
+    if (typeof historyStore.replaceHistory === 'function') {
+        historyStore.replaceHistory(target);
+    } else {
+        historyStore.history = target;
+    }
+
+    uiStore.showToast(`导入成功（${mode === 'merge' ? '合并' : '覆盖'}）`, 'success');
+    importPreview.value = { fileName: '', records: [], validRows: 0, error: '' };
+};
+
+const goToChecker = () => {
+    uiStore.closeModal();
+};
+
+watch(keyRows, (rows) => {
+    const validIds = new Set(rows.map((row) => row.id));
+    const next = new Set([...selectedKeyRowIds.value].filter((id) => validIds.has(id)));
+    if (next.size !== selectedKeyRowIds.value.size) {
+        selectedKeyRowIds.value = next;
+    }
+});
 </script>
 
 <template>
@@ -269,8 +410,8 @@ const importHistory = async (event) => {
                     <p>{{ pageDesc }}</p>
                 </div>
                 <div class="header-actions">
-                    <button class="btn" @click="refreshList">刷新列表</button>
                     <button class="btn" @click="close">关闭</button>
+                    <button class="btn" @click="refreshList">刷新列表</button>
                 </div>
             </div>
 
@@ -350,10 +491,32 @@ const importHistory = async (event) => {
             </div>
 
             <div class="content-wrap" v-else-if="activeSection === 'keys'">
+                <div class="keys-toolbar" v-if="keyRows.length > 0">
+                    <label class="check-all">
+                        <input type="checkbox" :checked="allVisibleRowsSelected" @change="toggleSelectAllVisible($event.target.checked)" />
+                        <span>全选当前结果</span>
+                    </label>
+                    <div class="sort-group">
+                        <label for="sortOrder">时间排序</label>
+                        <select id="sortOrder" v-model="keySortOrder">
+                            <option value="desc">最新优先</option>
+                            <option value="asc">最早优先</option>
+                        </select>
+                    </div>
+                    <div class="batch-actions">
+                        <button class="btn-text" :disabled="!hasSelectedRows" @click="copySelectedUrls">批量复制 URL</button>
+                        <button class="btn-text" :disabled="!hasSelectedRows" @click="copySelectedKeys">批量复制 Key</button>
+                        <button class="btn-text" :disabled="!hasSelectedRows" @click="copySelectedModels">批量复制模型</button>
+                        <button class="btn-text danger" :disabled="!hasSelectedRows" @click="deleteSelectedRows">批量删除</button>
+                        <button class="btn-text danger" :disabled="!hasSelectedRows" @click="clearSelection">清空勾选</button>
+                        <span class="selected-count">已选: {{ selectedKeyRows.length }}</span>
+                    </div>
+                </div>
                 <div class="table-wrap">
                     <table v-if="keyRows.length > 0" class="km-table">
                         <thead>
                             <tr>
+                                <th class="check-col">选择</th>
                                 <th>账号</th>
                                 <th>可用模型</th>
                                 <th>模型 URL</th>
@@ -364,6 +527,13 @@ const importHistory = async (event) => {
                         </thead>
                         <tbody>
                             <tr v-for="row in keyRows" :key="row.id">
+                                <td class="check-col">
+                                    <input
+                                        type="checkbox"
+                                        :checked="selectedKeyRowIds.has(row.id)"
+                                        @change="toggleSelectRow(row.id, $event.target.checked)"
+                                    />
+                                </td>
                                 <td>{{ row.providerName }}</td>
                                 <td :title="row.modelText">{{ row.modelText }}</td>
                                 <td :title="row.modelUrl">{{ row.modelUrl }}</td>
@@ -383,6 +553,7 @@ const importHistory = async (event) => {
                     <div v-else class="empty-state">
                         <p>暂无可用记录</p>
                         <span>请先检测出可用 Key 后再管理。</span>
+                        <button class="btn" @click="goToChecker">返回检测页</button>
                     </div>
                 </div>
             </div>
@@ -396,9 +567,21 @@ const importHistory = async (event) => {
                     </div>
                     <div class="ie-card">
                         <h4>导入记录</h4>
-                        <p>从 JSON 文件导入识别历史（会覆盖当前记录）。</p>
+                        <p>先选择文件预览，再决定覆盖或合并导入。</p>
                         <button class="btn" @click="openImportDialog">导入 JSON</button>
                         <input ref="importFileInput" type="file" accept="application/json" class="hidden-input" @change="importHistory" />
+                        <div class="import-preview" v-if="importPreview.fileName">
+                            <p><strong>文件:</strong> {{ importPreview.fileName }}</p>
+                            <p v-if="importPreview.error" class="import-error">{{ importPreview.error }}</p>
+                            <template v-else>
+                                <p>记录数: {{ importPreview.records.length }}，可用 Key 行: {{ importPreview.validRows }}</p>
+                                <div class="import-modes">
+                                    <label><input type="radio" value="overwrite" v-model="importMode" /> 覆盖当前记录</label>
+                                    <label><input type="radio" value="merge" v-model="importMode" /> 合并到当前记录</label>
+                                </div>
+                                <button class="btn" @click="applyImport">应用导入</button>
+                            </template>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -556,11 +739,58 @@ select {
     overflow: auto;
 }
 
+.keys-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 0 10px;
+    flex-wrap: wrap;
+}
+
+.check-all {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.sort-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.sort-group select {
+    height: 34px;
+    min-width: 120px;
+}
+
+.batch-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.selected-count {
+    color: var(--text-secondary);
+    font-size: 13px;
+    margin-left: 4px;
+}
+
 .km-table {
     width: 100%;
     border-collapse: collapse;
     table-layout: fixed;
     font-size: 13px;
+}
+
+.check-col {
+    width: 56px;
+    text-align: center;
 }
 
 .km-table th,
@@ -606,6 +836,11 @@ select {
 
 .btn-text.danger {
     color: var(--accent-error);
+}
+
+.btn-text:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
 }
 
 .empty-state {
@@ -667,6 +902,30 @@ select {
     color: var(--text-secondary);
 }
 
+.import-preview {
+    margin-top: 10px;
+    border-top: 1px solid var(--border-color-light);
+    padding-top: 10px;
+}
+
+.import-preview p {
+    margin: 0 0 8px;
+    font-size: 13px;
+}
+
+.import-error {
+    color: var(--accent-error);
+}
+
+.import-modes {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 8px 0 12px;
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
 .hidden-input {
     display: none;
 }
@@ -704,6 +963,10 @@ select {
     .ie-panel,
     .card-grid {
         grid-template-columns: 1fr;
+    }
+
+    .keys-toolbar {
+        align-items: flex-start;
     }
 
     .km-header h2 {
