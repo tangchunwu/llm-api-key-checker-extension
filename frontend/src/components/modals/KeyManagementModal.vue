@@ -464,7 +464,7 @@ watch(keyRows, (rows) => {
                                 <th>模型 URL</th>
                                 <th>出现次数</th>
                                 <th>最近时间</th>
-                                <th>操作</th>
+                                <th class="op-col">操作</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -474,7 +474,7 @@ watch(keyRows, (rows) => {
                                 <td :title="row.modelUrl">{{ row.modelUrl }}</td>
                                 <td>{{ row.count }}</td>
                                 <td>{{ formatTime(row.latestTimestamp) }}</td>
-                                <td>
+                                <td class="op-col">
                                     <div class="row-actions">
                                         <button class="btn-text" @click="copyModel(row.model)">复制模型</button>
                                         <button class="btn-text" @click="copyModelUrl(row.modelUrl)">复制 URL</button>
@@ -522,7 +522,7 @@ watch(keyRows, (rows) => {
                                 <th>模型 URL</th>
                                 <th>Key</th>
                                 <th>时间</th>
-                                <th>操作</th>
+                                <th class="op-col">操作</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -539,7 +539,7 @@ watch(keyRows, (rows) => {
                                 <td :title="row.modelUrl">{{ row.modelUrl }}</td>
                                 <td :title="row.key">{{ row.key }}</td>
                                 <td>{{ formatTime(row.timestamp) }}</td>
-                                <td>
+                                <td class="op-col">
                                     <div class="row-actions">
                                         <button class="btn-text" @click="copyModelUrl(row.modelUrl)">复制 URL</button>
                                         <button class="btn-text" @click="copyKey(row.key)">复制 Key</button>
@@ -786,11 +786,16 @@ select {
     border-collapse: collapse;
     table-layout: fixed;
     font-size: 13px;
+    min-width: 1200px;
 }
 
 .check-col {
     width: 56px;
     text-align: center;
+}
+
+.op-col {
+    width: 320px;
 }
 
 .km-table th,
@@ -803,6 +808,13 @@ select {
     text-overflow: ellipsis;
     overflow: hidden;
     font-family: var(--font-mono);
+}
+
+.km-table td.op-col,
+.km-table th.op-col {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: nowrap;
 }
 
 .km-table th {
@@ -818,6 +830,7 @@ select {
 .row-actions {
     display: flex;
     gap: 6px;
+    flex-wrap: nowrap;
 }
 
 .btn-text {

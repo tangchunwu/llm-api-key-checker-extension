@@ -142,7 +142,7 @@ onBeforeUnmount(() => {
         </div>
         <div class="footer">
             <p>© {{ currentYear }} LLM API KEY 检测工具 | <a href="https://github.com/ssfun/llm-api-key-checker" target="_blank"
-                    rel="noopener noreferrer">@SFUN</a></p>
+                    rel="noopener noreferrer">纯棉花</a></p>
         </div>
         <ToastContainer />
         <ModalContainer />
