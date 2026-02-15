@@ -2,7 +2,17 @@
     <div class="provider-config-area" v-if="currentConfig">
         <div class="config-grid">
             <div class="config-item">
-                <label :for="configStore.currentProvider + '__base'">Base URL</label>
+                <label :for="configStore.currentProvider + '__base'">
+                    Base URL
+                    <button
+                        type="button"
+                        class="inline-api-btn"
+                        @click="openProviderApiPage"
+                        :disabled="checkerStore.isChecking"
+                    >
+                        获取 API
+                    </button>
+                </label>
                 <input type="text" :id="configStore.currentProvider + '__base'" v-model="currentConfig.baseUrl"
                     placeholder="API Base URL" :disabled="checkerStore.isChecking">
             </div>
@@ -28,6 +38,7 @@ import { useConfigStore } from '@/stores/config';
 import { useUiStore } from '@/stores/ui';
 import { useCheckerStore } from '@/stores/checker';
 import { fetchModels } from '@/api';
+import { PROVIDER_API_KEY_URLS } from '@/constants/providerLinks';
 
 const configStore = useConfigStore();
 const uiStore = useUiStore();
@@ -39,6 +50,16 @@ const checkerStore = useCheckerStore();
 const currentConfig = computed(() => {
     return configStore.providerConfigs[configStore.currentProvider];
 });
+const currentProviderApiKeyUrl = computed(() => PROVIDER_API_KEY_URLS[configStore.currentProvider] || '');
+
+const openProviderApiPage = () => {
+    const url = currentProviderApiKeyUrl.value;
+    if (!url) {
+        uiStore.showToast('当前提供商暂无预设获取地址，请查看官方文档', 'info');
+        return;
+    }
+    window.open(url, '_blank', 'noopener,noreferrer');
+};
 
 /**
  * @description 处理获取模型列表的逻辑。
@@ -130,6 +151,25 @@ const handleFetchModels = async () => {
     .config-item label {
         font-size: 0.9rem;
         margin-bottom: 0;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .inline-api-btn {
+        border: 1px solid var(--border-color);
+        background: var(--bg-surface);
+        color: var(--text-secondary);
+        border-radius: var(--radius-sm);
+        height: 24px;
+        padding: 0 8px;
+        font-size: 12px;
+        cursor: pointer;
+    }
+
+    .inline-api-btn:hover:not(:disabled) {
+        background: var(--bg-tertiary);
+        color: var(--text-primary);
     }
 
     .input-with-button {

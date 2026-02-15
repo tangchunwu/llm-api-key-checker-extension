@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue';
 import { useUiStore } from '@/stores/ui';
 import { useConfigStore } from '@/stores/config';
 import { useHistoryStore } from '@/stores/history';
+import { PROVIDER_API_KEY_URLS } from '@/constants/providerLinks';
 
 const uiStore = useUiStore();
 const configStore = useConfigStore();
@@ -38,6 +39,11 @@ const providerOptions = computed(() => {
     }));
     entries.sort((a, b) => a.name.localeCompare(b.name));
     return entries;
+});
+const providerApiLinks = computed(() => {
+    return providerOptions.value
+        .map((item) => ({ ...item, url: PROVIDER_API_KEY_URLS[item.key] || '' }))
+        .filter((item) => !!item.url);
 });
 
 const currentProviderName = computed(() => {
@@ -162,6 +168,11 @@ const copyModelUrl = async (url) => {
 
 const copyModel = async (modelText) => {
     await copyText(modelText, '可用模型已复制');
+};
+
+const openProviderLink = (url) => {
+    if (!url) return;
+    window.open(url, '_blank', 'noopener,noreferrer');
 };
 
 const copyBatchField = async (field, successPrefix) => {
@@ -593,6 +604,17 @@ watch(keyRows, (rows) => {
                     <p>2. 你可以在“密钥管理”里直接复制 URL、Key、可用模型。</p>
                     <p>3. “模型列表”展示历史中出现过的可用模型并支持复制。</p>
                     <p>4. “导入/导出”用于迁移历史记录数据。</p>
+                    <h4 class="provider-links-title">厂商 API 获取入口</h4>
+                    <div class="provider-links-grid">
+                        <button
+                            v-for="item in providerApiLinks"
+                            :key="item.key"
+                            class="btn-text"
+                            @click="openProviderLink(item.url)"
+                        >
+                            {{ item.name }}
+                        </button>
+                    </div>
                 </div>
             </div>
 
@@ -951,6 +973,16 @@ select {
 .about-panel h4 {
     color: var(--text-primary);
     margin-bottom: 10px;
+}
+
+.provider-links-title {
+    margin-top: 18px;
+}
+
+.provider-links-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
 }
 
 .km-footer {

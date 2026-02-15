@@ -71,8 +71,8 @@ export const useCheckerStore = defineStore('checker', () => {
         totalTasks.value = keysToProcess.length;
         abortController = new AbortController(); // 用于停止任务
 
-        const limit = pLimit(configStore.concurrency || 5);
         const currentProviderKey = configStore.currentProvider;
+        const limit = pLimit(configStore.getEffectiveConcurrency(currentProviderKey));
         const providerConfig = configStore.providerConfigs[currentProviderKey];
         const providerMeta = configStore.providers[currentProviderKey];
         const fullConfig = {

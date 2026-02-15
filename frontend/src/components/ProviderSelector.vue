@@ -2,6 +2,14 @@
     <div class="provider-header">
         <label for="providerSelect">API 提供商</label>
         <div class="header-actions">
+            <button
+                @click="openProviderApiPage"
+                class="provider-api-btn"
+                title="打开当前提供商 API Key 获取页面"
+                :disabled="checkerStore.isChecking"
+            >
+                获取 API
+            </button>
             <label class="switch-label" title="启用流式检测 (Stream Mode)">
                 <span class="switch-title">流式检测</span>
                 <input type="checkbox" v-model="currentConfig.enableStream" :disabled="checkerStore.isChecking">
@@ -44,6 +52,7 @@ import { useConfigStore } from '@/stores/config';
 import { useUiStore } from '@/stores/ui';
 import { useResultsStore } from '@/stores/results';
 import { useCheckerStore } from '@/stores/checker';
+import { PROVIDER_API_KEY_URLS } from '@/constants/providerLinks';
 
 const configStore = useConfigStore();
 const uiStore = useUiStore();
@@ -57,6 +66,9 @@ const dropdownContainer = ref(null);
 const highlightedIndex = ref(-1);
 
 const providerKeys = computed(() => Object.keys(filteredProviders.value));
+const currentProviderApiKeyUrl = computed(() => {
+    return PROVIDER_API_KEY_URLS[configStore.currentProvider] || '';
+});
 
 /**
  * @description 计算属性，获取当前选中提供商的配置。
@@ -98,6 +110,15 @@ const handleProviderSelect = (key) => {
         resultsStore.activeTab = 'valid';
     }
     providerSearchTerm.value = ''; // 清空搜索词
+};
+
+const openProviderApiPage = () => {
+    const url = currentProviderApiKeyUrl.value;
+    if (!url) {
+        uiStore.showToast('当前提供商暂无预设获取地址，请查看官方文档', 'info');
+        return;
+    }
+    window.open(url, '_blank', 'noopener,noreferrer');
 };
 
 /**
@@ -213,7 +234,31 @@ watch(() => uiStore.providerDropdownOpen, (isOpen) => {
     .header-actions {
         display: flex;
         align-items: center;
-        gap: 16px;
+        gap: 12px;
+    }
+
+    .provider-api-btn {
+        border: 1px solid var(--border-color);
+        background: var(--bg-surface);
+        color: var(--text-secondary);
+        height: 34px;
+        border-radius: var(--radius-sm);
+        padding: 0 10px;
+        font-size: 12px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        white-space: nowrap;
+    }
+
+    .provider-api-btn:hover:not(:disabled) {
+        background: var(--bg-tertiary);
+        color: var(--text-primary);
+        border-color: var(--border-color-focus);
+    }
+
+    .provider-api-btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
     }
 
     .region-btn {

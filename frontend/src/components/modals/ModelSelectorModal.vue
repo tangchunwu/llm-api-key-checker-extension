@@ -34,7 +34,22 @@ const configStore = useConfigStore();
 const filteredModels = computed(() => {
     if (!uiStore.modalData.models) return [];
     const searchTerm = uiStore.modelSearch.toLowerCase();
-    return uiStore.modalData.models.filter(m => m.toLowerCase().includes(searchTerm));
+    const includeKeywords = String(configStore.modelIncludeKeywords || '')
+        .split(',')
+        .map(k => k.trim().toLowerCase())
+        .filter(Boolean);
+    const excludeKeywords = String(configStore.modelExcludeKeywords || '')
+        .split(',')
+        .map(k => k.trim().toLowerCase())
+        .filter(Boolean);
+
+    return uiStore.modalData.models.filter(m => {
+        const lower = m.toLowerCase();
+        if (searchTerm && !lower.includes(searchTerm)) return false;
+        if (includeKeywords.length > 0 && !includeKeywords.some(k => lower.includes(k))) return false;
+        if (excludeKeywords.length > 0 && excludeKeywords.some(k => lower.includes(k))) return false;
+        return true;
+    });
 });
 
 /**
